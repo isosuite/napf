@@ -134,8 +134,8 @@ class KDT:
 
     __slots__ = (
         "_core_tree",
-        "_nthread",
         "_dtype",
+        "_nthread",
     )
 
     def __init__(self, tree_data, metric=2, leaf_size=10, nthread=1):
