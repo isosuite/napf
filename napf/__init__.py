@@ -1,6 +1,5 @@
-from napf import _napf
+from napf import _napf, base
 from napf import _napf as core
-from napf import base
 from napf._version import version as __version__
 from napf.base import (
     KDT,
@@ -10,12 +9,12 @@ from napf.base import (
 )
 
 __all__ = [
-    "_napf",
-    "core",
-    "base",
-    "np2napf_dtypes",
-    "validate_metric_input",
-    "core_class_str_and_data",
     "KDT",
     "__version__",
+    "_napf",
+    "base",
+    "core",
+    "core_class_str_and_data",
+    "np2napf_dtypes",
+    "validate_metric_input",
 ]
