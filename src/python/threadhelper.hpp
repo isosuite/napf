@@ -2,18 +2,23 @@
 
 #include <algorithm>
 #include <thread>
+#include <vector>
 
 namespace napf {
 
 template<typename Func, typename IndexT>
 void nthread_execution(Func& f, const IndexT total, const IndexT nthread) {
+  if (total <= 0) {
+    return;
+  }
+
   // if nthread == 1, don't even bother creating thread
   if (nthread == 1 || nthread == 0) {
     f(0, total, 0);
     return;
   }
 
-  int n_usable_threads{nthread};
+  int n_usable_threads{static_cast<int>(nthread)};
 
   // negative input looks for hardware_concurrency
   if (nthread < 0) {
@@ -21,7 +26,11 @@ void nthread_execution(Func& f, const IndexT total, const IndexT nthread) {
   }
 
   // thread shouldn't exceed total
-  n_usable_threads = std::min(total, n_usable_threads);
+  n_usable_threads = std::min(static_cast<int>(total), n_usable_threads);
+  if (n_usable_threads <= 1) {
+    f(0, total, 0);
+    return;
+  }
 
   // get chunk size and prepare threads
   const IndexT chunk_size = (total + n_usable_threads - 1) / n_usable_threads;
