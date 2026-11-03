@@ -29,24 +29,6 @@ jobs:
         name: wheels-macos-arm64
         path: ./wheelhouse/*.whl
 
-  macos_wheel_intel:
-    runs-on: macos-13
-
-    steps:
-    - uses: actions/checkout@v4
-      with:
-        submodules: recursive
-    - name: build wheels
-      uses: pypa/cibuildwheel@v2.22.0
-      env:
-        CIBW_ARCHS: "x86_64"
-        CIBW_SKIP: "pp* cp38-*"
-
-    - uses: actions/upload-artifact@v4
-      with:
-        name: wheels-macos-x86_64
-        path: ./wheelhouse/*.whl
-
   linux_wheel:
     runs-on: ubuntu-latest
 
@@ -134,7 +116,7 @@ jobs:
         path: ./dist/*
 
   upload_pypi:
-    needs: [macos_wheel_m, macos_wheel_intel, linux_wheel, linux_wheel_qemu, windows_wheel, source_dist]
+    needs: [macos_wheel_m, linux_wheel, linux_wheel_qemu, windows_wheel, source_dist]
     runs-on: ubuntu-latest
     permissions:
       id-token: write
