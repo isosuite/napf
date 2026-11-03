@@ -19,7 +19,7 @@ __install with pip:__
 pip install --upgrade pip
 pip install napf
 ```
-_Note: in case your system requires a dynamic build, you need a c++11 compatible c++ compiler. To make sure a correct compiler is chosen, set `export CC=<your-c-compiler> CXX=<your-c++-compiler>`_
+*Note: in case your system requires a dynamic build, you need a C++17 compatible C++ compiler. To make sure a correct compiler is chosen, set `export CC=<your-c-compiler> CXX=<your-c++-compiler>`.*
 
 ```python
 import napf

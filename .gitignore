@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+docs/build/
+docs/source/_autosummary/
+wheelhouse/
+*.egg-info/

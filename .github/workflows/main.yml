@@ -10,50 +10,55 @@ jobs:
     runs-on: macos-14
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
       with:
         submodules: recursive
     - name: build wheels
-      uses: pypa/cibuildwheel@v2.19
+      uses: pypa/cibuildwheel@v2.22.0
       env:
         CIBW_ARCHS: "arm64"
+        CIBW_SKIP: "pp*"
 
-    - uses: actions/upload-artifact@v3
+    - uses: actions/upload-artifact@v4
       with:
+        name: wheels-macos-arm64
         path: ./wheelhouse/*.whl
 
   macos_wheel_intel:
     runs-on: macos-13
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
       with:
         submodules: recursive
     - name: build wheels
-      uses: pypa/cibuildwheel@v2.19
+      uses: pypa/cibuildwheel@v2.22.0
       env:
         CIBW_ARCHS: "x86_64"
+        CIBW_SKIP: "pp*"
 
-    - uses: actions/upload-artifact@v3
+    - uses: actions/upload-artifact@v4
       with:
+        name: wheels-macos-x86_64
         path: ./wheelhouse/*.whl
-
 
   linux_wheel:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
       with:
         submodules: recursive
     - name: build wheels
-      uses: pypa/cibuildwheel@v2.19
+      uses: pypa/cibuildwheel@v2.22.0
       env:
         CIBW_ARCHS: x86_64
         CIBW_BUILD: "cp*manylinux*"
+        CIBW_SKIP: "pp*"
 
-    - uses: actions/upload-artifact@v3
+    - uses: actions/upload-artifact@v4
       with:
+        name: wheels-linux-x86_64
         path: ./wheelhouse/*.whl
 
   linux_wheel_qemu:
@@ -61,31 +66,31 @@ jobs:
     strategy:
       matrix:
         arch: [aarch64, ppc64le]
-        cw_build: ["cp37*many*", "cp38*many*", "cp39*many*", "cp310*many*", "cp311*many*", "cp312*many*"]
+        cw_build: ["cp38*many*", "cp39*many*", "cp310*many*", "cp311*many*", "cp312*many*", "cp313*many*"]
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
       with:
         submodules: recursive
 
     - name: Set up QEMU
       if: runner.os == 'Linux'
-      uses: docker/setup-qemu-action@v2
+      uses: docker/setup-qemu-action@v3
       with:
         platforms: arm64, ppc64le
 
     - name: build wheels
-      uses: pypa/cibuildwheel@v2.19
+      uses: pypa/cibuildwheel@v2.22.0
       env:
         CIBW_ARCHS: ${{ matrix.arch }}
         CIBW_BUILD: ${{ matrix.cw_build }}
+        CIBW_SKIP: "pp* *t*"
         CIBW_TEST_SKIP: "*-*linux_{aarch64,ppc64le}"
 
-    - uses: actions/upload-artifact@v3
+    - uses: actions/upload-artifact@v4
       with:
+        name: wheels-linux-qemu-${{ matrix.arch }}-${{ strategy.job-index }}
         path: ./wheelhouse/*.whl
-
-
 
   windows_wheel:
     runs-on: windows-latest
@@ -94,47 +99,48 @@ jobs:
         arch: [x86, AMD64, ARM64]
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
       with:
         submodules: recursive
     - name: build wheels
-      uses: pypa/cibuildwheel@v2.19
+      uses: pypa/cibuildwheel@v2.22.0
       env:
         CIBW_ARCHS: ${{ matrix.arch }}
         CIBW_SKIP: "pp*"
 
-
-    - uses: actions/upload-artifact@v3
+    - uses: actions/upload-artifact@v4
       with:
+        name: wheels-windows-${{ matrix.arch }}
         path: ./wheelhouse/*.whl
-
 
   source_dist:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
       with:
         submodules: recursive
 
     - name: Build sdist
       run: pipx run build --sdist
 
-    - uses: actions/upload-artifact@v3
+    - uses: actions/upload-artifact@v4
       with:
+        name: sdist
         path: ./dist/*
 
   upload_pypi:
-    needs: [macos_wheel_m, macos_wheel_intel, linux_wheel, windows_wheel, source_dist]
+    needs: [macos_wheel_m, macos_wheel_intel, linux_wheel, linux_wheel_qemu, windows_wheel, source_dist]
     runs-on: ubuntu-latest
     permissions:
       id-token: write
     # try to publish only if this is a push to stable branch
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
-      - uses: actions/download-artifact@v3
+      - uses: actions/download-artifact@v4
         with:
-          name: artifact
+          pattern: '*'
           path: dist
+          merge-multiple: true
 
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
