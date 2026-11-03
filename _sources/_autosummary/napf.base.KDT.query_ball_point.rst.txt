@@ -1,0 +1,6 @@
+napf.base.KDT.query\_ball\_point
+================================
+
+.. currentmodule:: napf.base
+
+.. automethod:: KDT.query_ball_point

@@ -1,0 +1,84 @@
+napf.base.KDT
+=============
+
+.. currentmodule:: napf.base
+
+.. autoclass:: KDT
+   :show-inheritance:
+
+   
+
+   
+   .. rubric:: Methods
+
+   .. autosummary::
+      :toctree:
+   
+      
+      
+        
+          KDT.knn_search
+        
+      
+      
+        
+          KDT.newtree
+        
+      
+      
+        
+          KDT.query
+        
+      
+      
+        
+          KDT.query_ball_point
+        
+      
+      
+        
+          KDT.radii_search
+        
+      
+      
+        
+          KDT.radius_search
+        
+      
+      
+        
+          KDT.rknn_search
+        
+      
+      
+        
+          KDT.unique_data_and_inverse
+        
+      
+   
+   
+
+   
+   
+   .. rubric:: Attributes
+
+   .. autosummary::
+      :toctree:
+   
+      
+         KDT.core_tree
+      
+      
+         KDT.dim
+      
+      
+         KDT.dtype
+      
+      
+         KDT.nthread
+      
+      
+         KDT.tree_data
+      
+   
+   

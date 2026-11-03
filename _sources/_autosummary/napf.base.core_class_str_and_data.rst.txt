@@ -1,0 +1,6 @@
+napf.base.core\_class\_str\_and\_data
+=====================================
+
+.. currentmodule:: napf.base
+
+.. autofunction:: core_class_str_and_data

@@ -1,0 +1,6 @@
+napf.base.KDT.unique\_data\_and\_inverse
+========================================
+
+.. currentmodule:: napf.base
+
+.. automethod:: KDT.unique_data_and_inverse

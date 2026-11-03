@@ -1,0 +1,6 @@
+napf.base.KDT.radii\_search
+===========================
+
+.. currentmodule:: napf.base
+
+.. automethod:: KDT.radii_search

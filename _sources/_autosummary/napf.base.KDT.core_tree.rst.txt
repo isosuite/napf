@@ -1,0 +1,6 @@
+napf.base.KDT.core\_tree
+========================
+
+.. currentmodule:: napf.base
+
+.. autoproperty:: KDT.core_tree

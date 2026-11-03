@@ -1,0 +1,6 @@
+napf.base.validate\_metric\_input
+=================================
+
+.. currentmodule:: napf.base
+
+.. autofunction:: validate_metric_input

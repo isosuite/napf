@@ -1,0 +1,6 @@
+napf.base.KDT.dtype
+===================
+
+.. currentmodule:: napf.base
+
+.. autoproperty:: KDT.dtype

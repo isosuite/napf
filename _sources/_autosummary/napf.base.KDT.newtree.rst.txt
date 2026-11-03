@@ -1,0 +1,6 @@
+napf.base.KDT.newtree
+=====================
+
+.. currentmodule:: napf.base
+
+.. automethod:: KDT.newtree

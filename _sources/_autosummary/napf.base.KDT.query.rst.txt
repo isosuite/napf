@@ -1,0 +1,6 @@
+napf.base.KDT.query
+===================
+
+.. currentmodule:: napf.base
+
+.. automethod:: KDT.query

@@ -1,0 +1,6 @@
+napf.base.KDT.nthread
+=====================
+
+.. currentmodule:: napf.base
+
+.. autoproperty:: KDT.nthread

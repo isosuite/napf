@@ -1,0 +1,6 @@
+napf.base.enforce\_contiguous
+=============================
+
+.. currentmodule:: napf.base
+
+.. autofunction:: enforce_contiguous

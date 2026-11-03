@@ -1,0 +1,42 @@
+.. _napf.base:
+
+napf.base
+=========
+
+.. automodule:: napf.base
+
+   
+   
+   
+
+   
+   
+   .. rubric:: Functions
+
+   .. autosummary::
+      :toctree:
+   
+      core_class_str_and_data
+      enforce_contiguous
+      validate_metric_input
+   
+   
+
+   
+   
+   .. rubric:: Classes
+
+   .. autosummary::
+      :toctree:
+      :template:
+   
+      KDT
+   
+   
+
+   
+   
+   
+
+
+

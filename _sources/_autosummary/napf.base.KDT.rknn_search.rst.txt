@@ -1,0 +1,6 @@
+napf.base.KDT.rknn\_search
+==========================
+
+.. currentmodule:: napf.base
+
+.. automethod:: KDT.rknn_search
