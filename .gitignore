@@ -10,3 +10,4 @@ docs/build/
 docs/source/_autosummary/
 wheelhouse/
 *.egg-info/
+*.swp

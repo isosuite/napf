@@ -32,6 +32,8 @@ input = "napf/_version.py"
 test-command = "python {project}/tests/test_init_and_query.py"
 enable = ["cpython-prerelease", "cpython-freethreading"]
 skip = ["pp*", "cp38-*"]
+manylinux-x86_64-image = "manylinux_2_28"
+manylinux-aarch64-image = "manylinux_2_28"
 
 
 [project.readme]
