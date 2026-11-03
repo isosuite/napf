@@ -22,7 +22,7 @@ classifiers=[
 ]
 dependencies = ["numpy"]
 dynamic = ["version"]
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 
 [tool.scikit-build.metadata.version]
 provider = "scikit_build_core.metadata.regex"
@@ -30,7 +30,8 @@ input = "napf/_version.py"
 
 [tool.cibuildwheel]
 test-command = "python {project}/tests/test_init_and_query.py"
-skip = ["pp*"]
+enable = ["cpython-prerelease", "cpython-freethreading"]
+skip = ["pp*", "cp38-*"]
 
 
 [project.readme]
@@ -38,13 +39,13 @@ file = "README.md"
 content-type = "text/markdown"
 
 [tool.cibuildwheel.macos]
-skip = ["pp*"]
+skip = ["pp*", "cp38-*"]
 
 [tool.cibuildwheel.linux]
-skip = ["pp*"]
+skip = ["pp*", "cp38-*"]
 
 [tool.cibuildwheel.windows]
-skip = ["pp*"]
+skip = ["pp*", "cp38-*"]
 
 [tool.black]
 line-length = 79

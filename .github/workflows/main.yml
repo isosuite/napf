@@ -5,6 +5,9 @@ on:
     branches: ["main"]
   pull_request:
 
+env:
+  CIBW_ENABLE: "cpython-prerelease cpython-freethreading"
+
 jobs:
   macos_wheel_m:
     runs-on: macos-14
@@ -17,7 +20,7 @@ jobs:
       uses: pypa/cibuildwheel@v2.22.0
       env:
         CIBW_ARCHS: "arm64"
-        CIBW_SKIP: "pp*"
+        CIBW_SKIP: "pp* cp38-*"
 
     - uses: actions/upload-artifact@v4
       with:
@@ -35,7 +38,7 @@ jobs:
       uses: pypa/cibuildwheel@v2.22.0
       env:
         CIBW_ARCHS: "x86_64"
-        CIBW_SKIP: "pp*"
+        CIBW_SKIP: "pp* cp38-*"
 
     - uses: actions/upload-artifact@v4
       with:
@@ -54,7 +57,7 @@ jobs:
       env:
         CIBW_ARCHS: x86_64
         CIBW_BUILD: "cp*manylinux*"
-        CIBW_SKIP: "pp*"
+        CIBW_SKIP: "pp* cp38-*"
 
     - uses: actions/upload-artifact@v4
       with:
@@ -66,7 +69,7 @@ jobs:
     strategy:
       matrix:
         arch: [aarch64, ppc64le]
-        cw_build: ["cp38*many*", "cp39*many*", "cp310*many*", "cp311*many*", "cp312*many*", "cp313*many*"]
+        cw_build: ["cp39*many*", "cp310*many*", "cp311*many*", "cp312*many*", "cp313*many*", "cp314*many*"]
 
     steps:
     - uses: actions/checkout@v4
@@ -84,7 +87,7 @@ jobs:
       env:
         CIBW_ARCHS: ${{ matrix.arch }}
         CIBW_BUILD: ${{ matrix.cw_build }}
-        CIBW_SKIP: "pp* *t*"
+        CIBW_SKIP: "pp* *t* cp38-*"
         CIBW_TEST_SKIP: "*-*linux_{aarch64,ppc64le}"
 
     - uses: actions/upload-artifact@v4
@@ -106,7 +109,7 @@ jobs:
       uses: pypa/cibuildwheel@v2.22.0
       env:
         CIBW_ARCHS: ${{ matrix.arch }}
-        CIBW_SKIP: "pp*"
+        CIBW_SKIP: "pp* cp38-*"
 
     - uses: actions/upload-artifact@v4
       with:
