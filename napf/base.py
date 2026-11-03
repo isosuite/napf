@@ -24,17 +24,17 @@ def validate_metric_input(metric):
       validated metric casted to int.
     """
     try:
-        m = int(metric)
-        assert m in [1, 2]
+        try:
+            m = int(metric)
+            assert m in [1, 2]
 
-    except ValueError:
-        mstr = str(metric).lower()
-        print(mstr)
-        assert mstr.startswith("l1") or mstr.startswith("l2")
-        m = int(mstr[-1])
-        assert m in [1, 2]
+        except (ValueError, AssertionError):
+            mstr = str(metric).lower()
+            assert mstr.startswith(("l1", "l2"))
+            m = int(mstr[-1])
+            assert m in [1, 2]
 
-    except BaseException:
+    except (ValueError, AssertionError, IndexError):
         raise ValueError(
             "KDT only supports 1 or 2 (alternatively 'L1' or 'L2') "
             "as metric input."

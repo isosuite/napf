@@ -191,6 +191,7 @@ class InitAndQueryTest(unittest.TestCase):
                 nthread=nthread,
             )
             self.assertEqual(len(u_ids), 2)
+            self.assertEqual(len(inv_ids), 4)
             self.assertEqual(len(inter), 4)
             self.assertTrue(np.allclose(u_pts, pts[u_ids]))
 
@@ -203,6 +204,7 @@ class InitAndQueryTest(unittest.TestCase):
             )
             self.assertEqual(empty_u.shape, (0, 2))
             self.assertEqual(len(u_ids), 2)
+            self.assertEqual(len(inv_ids), 4)
             self.assertEqual(len(inter), 0)
 
 
