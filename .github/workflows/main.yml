@@ -71,7 +71,7 @@ jobs:
     strategy:
       matrix:
         arch: [aarch64, ppc64le]
-        cw_build: ["cp39*many*", "cp310*many*", "cp311*many*", "cp312*many*", "cp313*many*", "cp314*many*"]
+        cw_build: ["cp39*many*", "cp310*many*", "cp311*many*", "cp312*many*", "cp313*many*"]
 
     steps:
     - uses: actions/checkout@v4
