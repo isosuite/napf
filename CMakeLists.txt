@@ -45,7 +45,7 @@ else()
   target_include_directories(
     napf INTERFACE $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third_party>)
 endif()
-target_compile_features(napf INTERFACE cxx_std_11)
+target_compile_features(napf INTERFACE cxx_std_17)
 
 if(NAPF_BUILD_PYTHON)
   add_subdirectory(src/python)

@@ -1,7 +1,7 @@
 [build-system]
 requires = [
     "scikit-build-core",
-    "pybind11>=2.12",
+    "nanobind>=2.4.0",
 ]
 build-backend = "scikit_build_core.build"
 
@@ -22,7 +22,7 @@ classifiers=[
 ]
 dependencies = ["numpy"]
 dynamic = ["version"]
-requires-python = ">=3.7"
+requires-python = ">=3.9"
 
 [tool.scikit-build.metadata.version]
 provider = "scikit_build_core.metadata.regex"
@@ -30,6 +30,10 @@ input = "napf/_version.py"
 
 [tool.cibuildwheel]
 test-command = "python {project}/tests/test_init_and_query.py"
+enable = ["cpython-prerelease", "cpython-freethreading"]
+skip = ["pp*", "cp38-*"]
+manylinux-x86_64-image = "manylinux_2_28"
+manylinux-aarch64-image = "manylinux_2_28"
 
 
 [project.readme]
@@ -37,13 +41,13 @@ file = "README.md"
 content-type = "text/markdown"
 
 [tool.cibuildwheel.macos]
-skip = "pp*"
+skip = ["pp*", "cp38-*"]
 
 [tool.cibuildwheel.linux]
-skip = "pp*"
+skip = ["pp*", "cp38-*"]
 
 [tool.cibuildwheel.windows]
-skip = "pp*"
+skip = ["pp*", "cp38-*"]
 
 [tool.black]
 line-length = 79

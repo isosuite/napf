@@ -24,17 +24,17 @@ def validate_metric_input(metric):
       validated metric casted to int.
     """
     try:
-        m = int(metric)
-        assert m in [1, 2]
+        try:
+            m = int(metric)
+            assert m in [1, 2]
 
-    except ValueError:
-        mstr = str(metric).lower()
-        print(mstr)
-        assert mstr.startswith("l1") or mstr.startswith("l2")
-        m = int(mstr[-1])
-        assert m in [1, 2]
+        except (ValueError, AssertionError):
+            mstr = str(metric).lower()
+            assert mstr.startswith(("l1", "l2"))
+            m = int(mstr[-1])
+            assert m in [1, 2]
 
-    except BaseException:
+    except (ValueError, AssertionError, IndexError):
         raise ValueError(
             "KDT only supports 1 or 2 (alternatively 'L1' or 'L2') "
             "as metric input."
@@ -46,7 +46,7 @@ def validate_metric_input(metric):
 def enforce_contiguous(array, dtype=None):
     """
     If input is an instance / subclass of np.ndarray, this will check
-    if they are configuous. If so, returns same object, else turns makes it
+    if they are contiguous. If so, returns same object, else makes it
     contiguous and returns.
 
     Parameters
@@ -55,16 +55,16 @@ def enforce_contiguous(array, dtype=None):
 
     Returns
     -------
-    contiguous_array: array-like
+    contiguous_array: np.ndarray
     """
     if isinstance(array, np.ndarray):
         if array.flags["C_CONTIGUOUS"] and (
-            dtype is None or dtype is array.dtype
+            dtype is None or dtype == array.dtype
         ):
             return array
         return np.ascontiguousarray(array, dtype=dtype)
 
-    return array
+    return np.ascontiguousarray(array, dtype=dtype)
 
 
 def core_class_str_and_data(tree_data, metric):
@@ -221,6 +221,16 @@ class KDT:
         Returns dtype of current tree
         """
         return self._dtype
+
+    @property
+    def dim(self):
+        """
+        Returns dimension of current tree.
+        """
+        coretree = self.core_tree
+        if coretree is not None:
+            return coretree.dim
+        return None
 
     def newtree(self, tree_data, metric=2, leaf_size=10, nthread=1):
         """
@@ -477,4 +487,9 @@ class KDT:
                 intersection,
             )
         else:
-            return np.array(), unique_ids, inverse_ids, intersection
+            return (
+                np.empty((0, self.dim), dtype=self.dtype),
+                unique_ids,
+                inverse_ids,
+                intersection,
+            )

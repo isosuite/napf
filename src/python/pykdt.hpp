@@ -2,62 +2,75 @@
 
 #include <algorithm>
 #include <iostream>
-#include <iterator>
 #include <limits>
 #include <memory>
-#include <thread>
+#include <stdexcept>
+#include <string>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
-#include <pybind11/numpy.h>
-#include <pybind11/pybind11.h>
+#include <nanobind/nanobind.h>
+#include <nanobind/ndarray.h>
 
 #include "../napf.hpp"
 #include "threadhelper.hpp"
 
 namespace napf {
 
-namespace py = pybind11;
+namespace nb = nanobind;
 
-// Radius search result holder types
-using FloatVector = std::vector<float>;
-using FloatVectorVector = std::vector<FloatVector>;
-using DoubleVector = std::vector<double>;
-using DoubleVectorVector = std::vector<DoubleVector>;
-using UIntVector = std::vector<unsigned int>;
-using UIntVectorVector = std::vector<UIntVector>;
-
-// fix index type and add alias
-using IndexType = typename UIntVector::value_type;
-using IndexVector = UIntVector;
-using IndexVectorVector = UIntVectorVector;
+using IndexType = unsigned int;
 
 // helper function to get dummy values
 template<typename Type>
 Type max_and_negative_if_signed() {
   Type max_val = std::numeric_limits<Type>::max();
-  if (std::is_signed<Type>::value) {
+  if constexpr (std::is_signed_v<Type>) {
     max_val = -max_val;
   }
   return max_val;
 }
 
+// Custom callback to find minimum index within radius with zero heap allocation
+template<typename DistT, typename IndexT>
+struct MinIndexCallback {
+  using DistanceType = DistT;
+  using IndexType = IndexT;
+
+  const DistanceType radius;
+  IndexT min_idx;
+  size_t count{0};
+
+  explicit MinIndexCallback(DistanceType r, IndexT initial_idx)
+      : radius(r),
+        min_idx(initial_idx) {}
+
+  void init() { count = 0; }
+  void clear() { count = 0; }
+  size_t size() const noexcept { return count; }
+  bool empty() const noexcept { return count == 0; }
+  bool full() const noexcept { return true; }
+
+  bool addPoint(DistanceType dist, IndexT index) {
+    if (dist < radius) {
+      if (count == 0 || index < min_idx) {
+        min_idx = index;
+      }
+      ++count;
+    }
+    return true;
+  }
+
+  DistanceType worstDist() const noexcept { return radius; }
+  void sort() {}
+};
+
 template<typename DataT, unsigned int metric>
 class PyKDT {
 public:
-  // let's fix some datatype.
-  //   distance is always double, unless DataT is float
-  //   index is always unsigned int
   using DistT = typename std::
       conditional<std::is_same<DataT, float>::value, float, double>::type;
-  using DistVector =
-      typename std::conditional<std::is_same<DistT, float>::value,
-                                FloatVector,
-                                DoubleVector>::type;
-  using DistVectorVector =
-      typename std::conditional<std::is_same<DistVector, FloatVector>::value,
-                                FloatVectorVector,
-                                DoubleVectorVector>::type;
 
   using Tree = ArrayTree<DataT, DistT, IndexType, metric>;
   using Cloud = napf::ArrayCloud<DataT, IndexType>;
@@ -67,8 +80,8 @@ public:
   size_t leaf_size_{10};
   int nthread_{1};
 
-  py::array_t<DataT> tree_data_;
-  DataT* tree_data_ptr_ = nullptr;
+  nb::object tree_data_;
+  const DataT* tree_data_ptr_ = nullptr;
   IndexType datalen_ = 0;
   std::unique_ptr<Cloud> cloud_;
   std::unique_ptr<Tree> tree_;
@@ -77,453 +90,599 @@ public:
 
   PyKDT(PyKDT&& other) noexcept = default;
 
-  PyKDT(py::array_t<DataT> tree_data) { newtree(tree_data, 10, 1); }
-  PyKDT(py::array_t<DataT> tree_data,
+  PyKDT(nb::ndarray<const DataT, nb::c_contig> tree_data) {
+    newtree(tree_data, 10, 1);
+  }
+  PyKDT(nb::ndarray<const DataT, nb::c_contig> tree_data,
         const size_t leaf_size,
         const int nthread) {
     newtree(tree_data, leaf_size, nthread);
   }
 
   /* builds a new tree and saves it as unique_ptr */
-  void newtree(py::array_t<DataT> tree_data,
+  void newtree(nb::ndarray<const DataT, nb::c_contig> tree_data,
                const size_t leaf_size = 10,
                const int nthread = 1) {
-    // save settings
-    dim_ = tree_data.shape(1);
+    if (tree_data.ndim() != 2) {
+      throw std::invalid_argument("Input tree_data must be a 2D array.");
+    }
+
+    dim_ = static_cast<int>(tree_data.shape(1));
     leaf_size_ = leaf_size;
     nthread_ = nthread;
 
-    // create build param
     nanoflann::KDTreeSingleIndexAdaptorParams params(
         leaf_size,
         nanoflann::KDTreeSingleIndexAdaptorFlags::None,
         static_cast<unsigned int>(nthread));
 
-    // save relevant infos locally
-    // don't copy.
-    // be aware, this means even if you change tree_data inplace,
-    // the tree won't change
-    tree_data_ = tree_data;
-    const py::buffer_info t_buf = tree_data.request();
-    tree_data_ptr_ = static_cast<DataT*>(t_buf.ptr);
-    datalen_ = static_cast<IndexType>(t_buf.shape[0]);
+    tree_data_ = nb::cast(tree_data);
+    tree_data_ptr_ = tree_data.data();
+    datalen_ = static_cast<IndexType>(tree_data.shape(0));
 
-    // maybe can check if shape[1] matches dim here
-
-    // prepare cloud and tree
-    cloud_ = std::unique_ptr<Cloud>(
-        new Cloud(tree_data_ptr_, static_cast<IndexType>(t_buf.size), dim_));
-    tree_ = std::unique_ptr<Tree>(new Tree(dim_, *cloud_, params));
+    cloud_ = std::make_unique<Cloud>(tree_data_ptr_,
+                                     static_cast<IndexType>(tree_data.size()),
+                                     dim_);
+    tree_ = std::make_unique<Tree>(dim_, *cloud_, params);
   }
 
-  /* given query points, returns indices and distances */
-  py::tuple knn_search(const py::array_t<DataT> qpts,
+  /* given query points, returns distances and indices */
+  nb::tuple knn_search(nb::ndarray<const DataT, nb::c_contig> qpts,
                        const int kneighbors,
                        const int nthread) {
+    if (qpts.ndim() != 2 || static_cast<int>(qpts.shape(1)) != dim_) {
+      throw std::invalid_argument(
+          "Query array must be 2D with the second dimension matching tree dim ("
+          + std::to_string(dim_) + ").");
+    }
+    if (kneighbors <= 0) {
+      throw std::invalid_argument("kneighbors must be greater than 0.");
+    }
+    if (!tree_) {
+      throw std::runtime_error("Tree is not initialized.");
+    }
 
-    // in
-    const py::buffer_info q_buf = qpts.request();
-    const DataT* q_buf_ptr = static_cast<DataT*>(q_buf.ptr);
-    const int qlen = q_buf.shape[0];
+    const DataT* q_buf_ptr = qpts.data();
+    const size_t qlen = qpts.shape(0);
+    const size_t total_elements = qlen * static_cast<size_t>(kneighbors);
 
-    // out
-    py::array_t<IndexType> indices(qlen * kneighbors);
-    py::buffer_info i_buf = indices.request();
-    IndexType* i_buf_ptr = static_cast<IndexType*>(i_buf.ptr);
-    py::array_t<DistT> dist(qlen * kneighbors);
-    py::buffer_info d_buf = dist.request();
-    DistT* d_buf_ptr = static_cast<DistT*>(d_buf.ptr);
+    // Allocate raw memory via std::unique_ptr
+    auto i_ptr = std::make_unique<IndexType[]>(total_elements);
+    auto d_ptr = std::make_unique<DistT[]>(total_elements);
+
+    IndexType* raw_i = i_ptr.get();
+    DistT* raw_d = d_ptr.get();
 
     if (kneighbors > static_cast<int>(datalen_)) {
-      std::cout << "WARNING - " << "kneighbors (" << kneighbors
-                << ") is bigger than number of tree data (" << datalen_ << "! "
-                << "Returning arrays `[:, " << datalen_ - kneighbors
-                << ":]` entries will be filled with random indices."
+      std::cout << "WARNING - kneighbors (" << kneighbors
+                << ") is bigger than number of tree data (" << datalen_ << ")! "
+                << "Tail entries will be filled with dummy values."
                 << std::endl;
     }
 
-    // prepare routine in lambda so that it can be executed with nthreads
+    const DistT dummy_dist = max_and_negative_if_signed<DistT>();
+    const IndexType dummy_index = max_and_negative_if_signed<IndexType>();
+
     auto searchknn = [&](int begin, int end, int) {
       for (int i{begin}; i < end; i++) {
-        const int j{i * dim_};
-        const int k{i * kneighbors};
-        tree_->knnSearch(&q_buf_ptr[j],
-                         kneighbors,
-                         &i_buf_ptr[k],
-                         &d_buf_ptr[k]);
+        const size_t j = static_cast<size_t>(i) * dim_;
+        const size_t k = static_cast<size_t>(i) * kneighbors;
+        const size_t n_found = tree_->knnSearch(&q_buf_ptr[j],
+                                                static_cast<size_t>(kneighbors),
+                                                &raw_i[k],
+                                                &raw_d[k]);
+        for (size_t m = n_found; m < static_cast<size_t>(kneighbors); ++m) {
+          raw_i[k + m] = dummy_index;
+          raw_d[k + m] = dummy_dist;
+        }
       }
     };
 
-    // don't worry, if nthread == 1, we don't create threads.
-    nthread_execution(searchknn, qlen, nthread);
+    {
+      nb::gil_scoped_release release;
+      nthread_execution(searchknn, static_cast<int>(qlen), nthread);
+    }
 
-    indices.resize({qlen, kneighbors});
-    dist.resize({qlen, kneighbors});
+    size_t shape[2] = {qlen, static_cast<size_t>(kneighbors)};
+    IndexType* final_i = i_ptr.release();
+    DistT* final_d = d_ptr.release();
 
-    return py::make_tuple(dist, indices);
+    nb::capsule i_owner(final_i, [](void* p) noexcept {
+      delete[] static_cast<IndexType*>(p);
+    });
+    nb::capsule d_owner(final_d, [](void* p) noexcept {
+      delete[] static_cast<DistT*>(p);
+    });
+
+    auto dist_arr =
+        nb::ndarray<nb::numpy, DistT, nb::shape<2>>(final_d, 2, shape, d_owner);
+    auto indices_arr = nb::ndarray<nb::numpy, IndexType, nb::shape<2>>(final_i,
+                                                                       2,
+                                                                       shape,
+                                                                       i_owner);
+
+    return nb::make_tuple(dist_arr, indices_arr);
   }
 
   /* scipy KDTree style query */
-  py::tuple query(const py::array_t<DataT> qpts, const int nthread) {
+  nb::tuple query(nb::ndarray<const DataT, nb::c_contig> qpts,
+                  const int nthread) {
     return knn_search(qpts, 1, nthread);
   }
 
   /* radius search */
-  py::tuple radius_search(const py::array_t<DataT> qpts,
+  nb::tuple radius_search(nb::ndarray<const DataT, nb::c_contig> qpts,
                           const DistT radius,
                           const bool return_sorted,
                           const int nthread) {
-    // in
-    const py::buffer_info q_buf = qpts.request();
-    const DataT* q_buf_ptr = static_cast<DataT*>(q_buf.ptr);
-    const int qlen = q_buf.shape[0];
+    if (qpts.ndim() != 2 || static_cast<int>(qpts.shape(1)) != dim_) {
+      throw std::invalid_argument(
+          "Query array must be 2D with the second dimension matching tree dim ("
+          + std::to_string(dim_) + ").");
+    }
+    if (!tree_) {
+      throw std::runtime_error("Tree is not initialized.");
+    }
+
+    const DataT* q_buf_ptr = qpts.data();
+    const size_t qlen = qpts.shape(0);
 
     nanoflann::SearchParameters params;
     params.sorted = return_sorted;
 
-    // out
-    IndexVectorVector out_indices(qlen);
-    DistVectorVector out_dist(qlen);
+    std::vector<std::unique_ptr<IndexType[]>> results_i(qlen);
+    std::vector<std::unique_ptr<DistT[]>> results_d(qlen);
+    std::vector<size_t> counts(qlen, 0);
 
     auto searchradius = [&](int begin, int end, int) {
+      std::vector<nanoflann::ResultItem<IndexType, DistT>> thread_matches;
       for (int i{begin}; i < end; i++) {
-
-        auto& this_indices = out_indices[i];
-        auto& this_dist = out_dist[i];
-
-        // prepare input
-        std::vector<nanoflann::ResultItem<IndexType, DistT>> matches;
-
-        // call
+        thread_matches.clear();
         const auto nmatches =
-            tree_->radiusSearch(&q_buf_ptr[i * dim_], radius, matches, params);
-
-        this_indices.reserve(nmatches);
-        this_dist.reserve(nmatches);
-
-        for (auto& match : matches) {
-          this_indices.emplace_back(match.first);
-          this_dist.emplace_back(match.second);
+            tree_->radiusSearch(&q_buf_ptr[static_cast<size_t>(i) * dim_],
+                                radius,
+                                thread_matches,
+                                params);
+        auto out_i = std::make_unique<IndexType[]>(nmatches);
+        auto out_d = std::make_unique<DistT[]>(nmatches);
+        for (size_t k = 0; k < nmatches; ++k) {
+          out_i[k] = thread_matches[k].first;
+          out_d[k] = thread_matches[k].second;
         }
+        results_i[i] = std::move(out_i);
+        results_d[i] = std::move(out_d);
+        counts[i] = nmatches;
       }
     };
 
-    nthread_execution(searchradius, qlen, nthread);
+    {
+      nb::gil_scoped_release release;
+      nthread_execution(searchradius, static_cast<int>(qlen), nthread);
+    }
 
-    return py::make_tuple<py::return_value_policy::move>(out_indices, out_dist);
+    nb::list out_indices;
+    nb::list out_dist;
+
+    for (size_t i = 0; i < qlen; ++i) {
+      const size_t cnt = counts[i];
+      size_t shape[1] = {cnt};
+      IndexType* raw_i = results_i[i].release();
+      DistT* raw_d = results_d[i].release();
+
+      nb::capsule i_owner(raw_i, [](void* p) noexcept {
+        delete[] static_cast<IndexType*>(p);
+      });
+      nb::capsule d_owner(raw_d, [](void* p) noexcept {
+        delete[] static_cast<DistT*>(p);
+      });
+
+      auto arr_i = nb::ndarray<nb::numpy, IndexType, nb::shape<1>>(raw_i,
+                                                                   1,
+                                                                   shape,
+                                                                   i_owner);
+      auto arr_d =
+          nb::ndarray<nb::numpy, DistT, nb::shape<1>>(raw_d, 1, shape, d_owner);
+
+      out_indices.append(arr_i);
+      out_dist.append(arr_d);
+    }
+
+    return nb::make_tuple(out_indices, out_dist);
   }
 
   /* radius knn search */
-  py::tuple rknn_search(const py::array_t<DataT> qpts,
+  nb::tuple rknn_search(nb::ndarray<const DataT, nb::c_contig> qpts,
                         const DistT radius,
                         const int n_nearest,
                         const int nthread) {
+    if (qpts.ndim() != 2 || static_cast<int>(qpts.shape(1)) != dim_) {
+      throw std::invalid_argument(
+          "Query array must be 2D with the second dimension matching tree dim ("
+          + std::to_string(dim_) + ").");
+    }
+    if (n_nearest <= 0) {
+      throw std::invalid_argument("n_nearest must be greater than 0.");
+    }
+    if (!tree_) {
+      throw std::runtime_error("Tree is not initialized.");
+    }
 
-    // in
-    const py::buffer_info q_buf = qpts.request();
-    const DataT* q_buf_ptr = static_cast<DataT*>(q_buf.ptr);
-    const int qlen = q_buf.shape[0];
+    const DataT* q_buf_ptr = qpts.data();
+    const size_t qlen = qpts.shape(0);
+    const size_t total_elements = qlen * static_cast<size_t>(n_nearest);
 
-    // out
-    py::array_t<IndexType> indices({qlen, n_nearest});
-    py::array_t<DistT> distances({qlen, n_nearest});
-    // get pointers
-    IndexType* i_ptr = static_cast<IndexType*>(indices.request().ptr);
-    DistT* d_ptr = static_cast<DistT*>(distances.request().ptr);
+    auto i_ptr = std::make_unique<IndexType[]>(total_elements);
+    auto d_ptr = std::make_unique<DistT[]>(total_elements);
+
+    IndexType* raw_i = i_ptr.get();
+    DistT* raw_d = d_ptr.get();
+
+    const DistT dummy_dist = max_and_negative_if_signed<DistT>();
+    const IndexType dummy_index = max_and_negative_if_signed<IndexType>();
 
     auto searchradiusknn = [&](int begin, int end, int) {
-      // get pointers for this chunk/thread
-      IndexType* t_i_ptr = &i_ptr[begin * dim_];
-      DistT* t_d_ptr = &d_ptr[begin * dim_];
-      // dummpy values - put max value
-
-      const DistT dummy_dist = max_and_negative_if_signed<DistT>();
-      const IndexType dummy_index = max_and_negative_if_signed<IndexType>();
       for (int i{begin}; i < end; i++) {
+        const size_t q_idx = static_cast<size_t>(i) * dim_;
+        // Fix buffer offset bug: use n_nearest instead of dim_
+        const size_t out_idx = static_cast<size_t>(i) * n_nearest;
 
-        // call
-        const auto n_matches = tree_->rknnSearch(&q_buf_ptr[i * dim_],
-                                                 n_nearest,
-                                                 t_i_ptr,
-                                                 t_d_ptr,
+        IndexType* cur_i = &raw_i[out_idx];
+        DistT* cur_d = &raw_d[out_idx];
+
+        const auto n_matches = tree_->rknnSearch(&q_buf_ptr[q_idx],
+                                                 static_cast<size_t>(n_nearest),
+                                                 cur_i,
+                                                 cur_d,
                                                  radius);
 
-        // in case nmatches < n_nearest, we fill the rest with dummy values
-        for (int j{static_cast<int>(n_matches)}; j < n_nearest; ++j) {
-          t_i_ptr[j] = dummy_index;
-          t_d_ptr[j] = dummy_dist;
+        for (size_t j{n_matches}; j < static_cast<size_t>(n_nearest); ++j) {
+          cur_i[j] = dummy_index;
+          cur_d[j] = dummy_dist;
         }
-
-        // next pointers
-        t_i_ptr += n_nearest;
-        t_d_ptr += n_nearest;
       }
     };
 
-    nthread_execution(searchradiusknn, qlen, nthread);
+    {
+      nb::gil_scoped_release release;
+      nthread_execution(searchradiusknn, static_cast<int>(qlen), nthread);
+    }
 
-    return py::make_tuple<py::return_value_policy::move>(indices, distances);
+    size_t shape[2] = {qlen, static_cast<size_t>(n_nearest)};
+    IndexType* final_i = i_ptr.release();
+    DistT* final_d = d_ptr.release();
+
+    nb::capsule i_owner(final_i, [](void* p) noexcept {
+      delete[] static_cast<IndexType*>(p);
+    });
+    nb::capsule d_owner(final_d, [](void* p) noexcept {
+      delete[] static_cast<DistT*>(p);
+    });
+
+    auto indices_arr = nb::ndarray<nb::numpy, IndexType, nb::shape<2>>(final_i,
+                                                                       2,
+                                                                       shape,
+                                                                       i_owner);
+    auto dist_arr =
+        nb::ndarray<nb::numpy, DistT, nb::shape<2>>(final_d, 2, shape, d_owner);
+
+    return nb::make_tuple(indices_arr, dist_arr);
   }
 
-  /// @brief
-  /// @param qpts
-  /// @param radius
-  /// @param return_sorted here, sort is based on ids, not distance
-  /// @param nthread
-  /// @return
-  IndexVectorVector query_ball_point(const py::array_t<DataT> qpts,
-                                     const DistT radius,
-                                     const bool return_sorted,
-                                     const int nthread) {
+  nb::list query_ball_point(nb::ndarray<const DataT, nb::c_contig> qpts,
+                            const DistT radius,
+                            const bool return_sorted,
+                            const int nthread) {
+    if (qpts.ndim() != 2 || static_cast<int>(qpts.shape(1)) != dim_) {
+      throw std::invalid_argument(
+          "Query array must be 2D with the second dimension matching tree dim ("
+          + std::to_string(dim_) + ").");
+    }
+    if (!tree_) {
+      throw std::runtime_error("Tree is not initialized.");
+    }
 
-    using PairType = nanoflann::ResultItem<IndexType, DistT>;
+    const DataT* q_buf_ptr = qpts.data();
+    const size_t qlen = qpts.shape(0);
 
-    // in
-    const py::buffer_info q_buf = qpts.request();
-    const DataT* q_buf_ptr = static_cast<DataT*>(q_buf.ptr);
-    const int qlen = q_buf.shape[0];
-    // we don't need distance based sorting
     nanoflann::SearchParameters params;
     params.sorted = false;
 
-    // out
-    IndexVectorVector out_indices(qlen);
+    std::vector<std::unique_ptr<IndexType[]>> results_i(qlen);
+    std::vector<size_t> counts(qlen, 0);
 
     auto searchradius = [&](int start, int end, int) {
-      for (int i{start}; i < end; i++) {
-        auto& this_indices = out_indices[i];
-
-        // prepare input
-        std::vector<PairType> matches;
-
-        // call
+      std::vector<nanoflann::ResultItem<IndexType, DistT>> thread_matches;
+      for (int i{start}; i < end; ++i) {
+        thread_matches.clear();
         const auto nmatches =
-            tree_->radiusSearch(&q_buf_ptr[i * dim_], radius, matches, params);
-
-        // prepare output
-        this_indices.reserve(nmatches);
-
-        // unpack and fill output
-        for (auto& match : matches) {
-          this_indices.emplace_back(match.first);
+            tree_->radiusSearch(&q_buf_ptr[static_cast<size_t>(i) * dim_],
+                                radius,
+                                thread_matches,
+                                params);
+        auto out_i = std::make_unique<IndexType[]>(nmatches);
+        for (size_t k = 0; k < nmatches; ++k) {
+          out_i[k] = thread_matches[k].first;
         }
-
-        // sort ids
         if (return_sorted) {
-          // default sort is good here.
-          std::sort(this_indices.begin(), this_indices.end());
+          std::sort(out_i.get(), out_i.get() + nmatches);
         }
+        results_i[i] = std::move(out_i);
+        counts[i] = nmatches;
       }
     };
 
-    nthread_execution(searchradius, qlen, nthread);
+    {
+      nb::gil_scoped_release release;
+      nthread_execution(searchradius, static_cast<int>(qlen), nthread);
+    }
+
+    nb::list out_indices;
+    for (size_t i = 0; i < qlen; ++i) {
+      const size_t cnt = counts[i];
+      size_t shape[1] = {cnt};
+      IndexType* raw_i = results_i[i].release();
+      nb::capsule i_owner(raw_i, [](void* p) noexcept {
+        delete[] static_cast<IndexType*>(p);
+      });
+      auto arr_i = nb::ndarray<nb::numpy, IndexType, nb::shape<1>>(raw_i,
+                                                                   1,
+                                                                   shape,
+                                                                   i_owner);
+      out_indices.append(arr_i);
+    }
 
     return out_indices;
   }
 
-  /// @brief unique points, indices of unique points, inverse indices to
-  /// create original points base on unique points.
-  /// @param radius
-  /// @param return_intersection returns neighbor
-  /// @param nthread
-  /// @return
-  py::tuple tree_data_unique_inverse(const DistT radius,
+  nb::tuple tree_data_unique_inverse(const DistT radius,
                                      const bool return_intersection,
                                      const int nthread) {
+    if (!tree_ || datalen_ == 0) {
+      throw std::runtime_error("Tree is not initialized or empty.");
+    }
 
-    using PairType = nanoflann::ResultItem<IndexType, DistT>;
-
-    // in - self tree data
     const DataT* q_buf_ptr = tree_data_ptr_;
-    const IndexType qlen = datalen_;
+    const size_t qlen = static_cast<size_t>(datalen_);
 
-    // we don't need distance based sorting
     nanoflann::SearchParameters params;
     params.sorted = false;
 
-    // out
-    IndexVectorVector intersection{};
+    auto o_inv = std::make_unique<IndexType[]>(qlen);
+    IndexType* o_i_ptr = o_inv.get();
+
+    std::vector<std::unique_ptr<IndexType[]>> results_intersection;
+    std::vector<size_t> counts;
     if (return_intersection) {
-      intersection.resize(qlen);
+      results_intersection.resize(qlen);
+      counts.resize(qlen, 0);
     }
-    // prepare original inverse
-    py::array_t<IndexType> original_inverse(qlen);
-    IndexType* o_i_ptr =
-        static_cast<IndexType*>(original_inverse.request().ptr);
 
-    const IndexType index_t_dim{static_cast<IndexType>(dim_)};
-    auto searchradius = [&](int start, int end, int current_tid) {
-      for (IndexType i{static_cast<IndexType>(start)};
-           i < static_cast<IndexType>(end);
-           ++i) {
+    const size_t index_t_dim = static_cast<size_t>(dim_);
 
-        // prepare input
-        std::vector<PairType> matches;
-
-        // call
-        const auto nmatches = tree_->radiusSearch(&q_buf_ptr[i * index_t_dim],
-                                                  radius,
-                                                  matches,
-                                                  params);
-
-        // prepare output
-        // set inverse_id
-        IndexType unique_id;
-        if (return_intersection) {
-          auto& this_intersection = intersection[i];
-          this_intersection.reserve(nmatches);
-          for (auto& match : matches) {
-            this_intersection.emplace_back(match.first);
-          }
-          std::sort(this_intersection.begin(), this_intersection.end());
-          // set inverse_ids - it is the smallest neighbor (intersection)
-          // index
-          unique_id = this_intersection[0];
-        } else {
-          // here, we'd only need min.
-          const auto& min_match =
-              *std::min_element(matches.begin(),
-                                matches.end(),
-                                [](const PairType& a, const PairType& b) {
-                                  return a.first < b.first;
-                                });
-          unique_id = min_match.first;
+    if (!return_intersection) {
+      // Zero heap allocation fast-path using MinIndexCallback
+      auto searchradius = [&](int start, int end, int) {
+        for (size_t i = static_cast<size_t>(start);
+             i < static_cast<size_t>(end);
+             ++i) {
+          MinIndexCallback<DistT, IndexType> cb(radius,
+                                                static_cast<IndexType>(i));
+          (void) tree_->radiusSearchCustomCallback(&q_buf_ptr[i * index_t_dim],
+                                                   cb,
+                                                   params);
+          o_i_ptr[i] = cb.min_idx;
         }
-        o_i_ptr[i] = unique_id;
+      };
+
+      {
+        nb::gil_scoped_release release;
+        nthread_execution(searchradius, static_cast<int>(qlen), nthread);
       }
-    };
+    } else {
+      // With intersection
+      auto searchradius = [&](int start, int end, int) {
+        std::vector<nanoflann::ResultItem<IndexType, DistT>> thread_matches;
+        for (size_t i = static_cast<size_t>(start);
+             i < static_cast<size_t>(end);
+             ++i) {
+          thread_matches.clear();
+          const auto nmatches = tree_->radiusSearch(&q_buf_ptr[i * index_t_dim],
+                                                    radius,
+                                                    thread_matches,
+                                                    params);
+          auto out_i = std::make_unique<IndexType[]>(nmatches);
+          for (size_t k = 0; k < nmatches; ++k) {
+            out_i[k] = thread_matches[k].first;
+          }
+          std::sort(out_i.get(), out_i.get() + nmatches);
+          o_i_ptr[i] = (nmatches > 0) ? out_i[0] : static_cast<IndexType>(i);
+          results_intersection[i] = std::move(out_i);
+          counts[i] = nmatches;
+        }
+      };
 
-    nthread_execution(searchradius, static_cast<int>(qlen), nthread);
+      {
+        nb::gil_scoped_release release;
+        nthread_execution(searchradius, static_cast<int>(qlen), nthread);
+      }
+    }
 
-    return py::make_tuple<py::return_value_policy::move>(original_inverse,
-                                                         intersection);
+    size_t shape[1] = {qlen};
+    IndexType* final_o_i = o_inv.release();
+    nb::capsule o_owner(final_o_i, [](void* p) noexcept {
+      delete[] static_cast<IndexType*>(p);
+    });
+    auto original_inverse =
+        nb::ndarray<nb::numpy, IndexType, nb::shape<1>>(final_o_i,
+                                                        1,
+                                                        shape,
+                                                        o_owner);
+
+    nb::list intersection_list;
+    if (return_intersection) {
+      for (size_t i = 0; i < qlen; ++i) {
+        const size_t cnt = counts[i];
+        size_t sub_shape[1] = {cnt};
+        IndexType* raw_sub = results_intersection[i].release();
+        nb::capsule sub_owner(raw_sub, [](void* p) noexcept {
+          delete[] static_cast<IndexType*>(p);
+        });
+        auto sub_arr =
+            nb::ndarray<nb::numpy, IndexType, nb::shape<1>>(raw_sub,
+                                                            1,
+                                                            sub_shape,
+                                                            sub_owner);
+        intersection_list.append(sub_arr);
+      }
+    }
+
+    return nb::make_tuple(original_inverse, intersection_list);
   }
 
-  /* radii search. in other words, each query can have different radius */
-  py::tuple radii_search(const py::array_t<DataT> qpts,
-                         const py::array_t<DistT> radii,
+  /* radii search. each query can have a different radius */
+  nb::tuple radii_search(nb::ndarray<const DataT, nb::c_contig> qpts,
+                         nb::ndarray<const DistT, nb::c_contig> radii,
                          const bool return_sorted,
                          const int nthread) {
-    // in
-    const py::buffer_info q_buf = qpts.request();
-    const DataT* q_buf_ptr = static_cast<DataT*>(q_buf.ptr);
-    const int qlen = q_buf.shape[0];
-
-    const py::buffer_info r_buf = radii.request();
-    const DistT* r_buf_ptr = static_cast<DistT*>(r_buf.ptr);
-    const int rlen = r_buf.shape[0];
-
-    // execution ending error is too brutal and merciless
-    // print warning and return empty
+    if (qpts.ndim() != 2 || static_cast<int>(qpts.shape(1)) != dim_) {
+      throw std::invalid_argument(
+          "Query array must be 2D with the second dimension matching tree dim ("
+          + std::to_string(dim_) + ").");
+    }
+    const size_t qlen = qpts.shape(0);
+    const size_t rlen = radii.size();
     if (qlen != rlen) {
-      std::cout << "CRITICAL WARNING - " << "query length (" << qlen
+      std::cout << "CRITICAL WARNING - query length (" << qlen
                 << ") and radii length (" << rlen << ") differ! "
                 << "returning empty tuple." << std::endl;
-
-      return py::tuple{};
+      return nb::tuple();
     }
+    if (!tree_) {
+      throw std::runtime_error("Tree is not initialized.");
+    }
+
+    const DataT* q_buf_ptr = qpts.data();
+    const DistT* r_buf_ptr = radii.data();
 
     nanoflann::SearchParameters params;
     params.sorted = return_sorted;
 
-    // out
-    IndexVectorVector out_indices(qlen);
-    DistVectorVector out_dist(qlen);
+    std::vector<std::unique_ptr<IndexType[]>> results_i(qlen);
+    std::vector<std::unique_ptr<DistT[]>> results_d(qlen);
+    std::vector<size_t> counts(qlen, 0);
 
     auto searchradius = [&](int start, int end, int) {
-      auto& this_indices = out_indices[start];
-      auto& this_dist = out_dist[start];
-
+      std::vector<nanoflann::ResultItem<IndexType, DistT>> thread_matches;
+      // Fixed outer variable bug: per-query result inside loop
       for (int i{start}; i < end; ++i) {
-        // prepare input
-        std::vector<nanoflann::ResultItem<IndexType, DistT>> matches;
+        thread_matches.clear();
+        const auto nmatches =
+            tree_->radiusSearch(&q_buf_ptr[static_cast<size_t>(i) * dim_],
+                                r_buf_ptr[i],
+                                thread_matches,
+                                params);
 
-        // call
-        const auto nmatches = tree_->radiusSearch(&q_buf_ptr[i * dim_],
-                                                  r_buf_ptr[i],
-                                                  matches,
-                                                  params);
-
-        this_indices.reserve(nmatches);
-        this_dist.reserve(nmatches);
-
-        // unpack and fill output
-        for (int k{0}; k < (int) nmatches; ++k) {
-          this_indices.emplace_back(matches[k].first);
-          this_dist.emplace_back(matches[k].second);
+        auto out_i = std::make_unique<IndexType[]>(nmatches);
+        auto out_d = std::make_unique<DistT[]>(nmatches);
+        for (size_t k = 0; k < nmatches; ++k) {
+          out_i[k] = thread_matches[k].first;
+          out_d[k] = thread_matches[k].second;
         }
+        results_i[i] = std::move(out_i);
+        results_d[i] = std::move(out_d);
+        counts[i] = nmatches;
       }
     };
 
-    nthread_execution(searchradius, qlen, nthread);
+    {
+      nb::gil_scoped_release release;
+      nthread_execution(searchradius, static_cast<int>(qlen), nthread);
+    }
 
-    return py::make_tuple<py::return_value_policy::move>(out_indices, out_dist);
+    nb::list out_indices;
+    nb::list out_dist;
+
+    for (size_t i = 0; i < qlen; ++i) {
+      const size_t cnt = counts[i];
+      size_t shape[1] = {cnt};
+      IndexType* raw_i = results_i[i].release();
+      DistT* raw_d = results_d[i].release();
+
+      nb::capsule i_owner(raw_i, [](void* p) noexcept {
+        delete[] static_cast<IndexType*>(p);
+      });
+      nb::capsule d_owner(raw_d, [](void* p) noexcept {
+        delete[] static_cast<DistT*>(p);
+      });
+
+      auto arr_i = nb::ndarray<nb::numpy, IndexType, nb::shape<1>>(raw_i,
+                                                                   1,
+                                                                   shape,
+                                                                   i_owner);
+      auto arr_d =
+          nb::ndarray<nb::numpy, DistT, nb::shape<1>>(raw_d, 1, shape, d_owner);
+
+      out_indices.append(arr_i);
+      out_dist.append(arr_d);
+    }
+
+    return nb::make_tuple(out_indices, out_dist);
   }
 };
 
 template<typename T, unsigned int metric>
-void add_kdt_pyclass(py::module_& m, const char* class_name) {
+void add_kdt_pyclass(nb::module_& m, const char* class_name) {
   using KDT = PyKDT<T, metric>;
 
-  py::class_<KDT> klasse(m, class_name);
-
-  klasse.def(py::init<>())
-      .def(py::init<py::array_t<T>, size_t, int>(),
-           py::arg("tree_data"),
-           py::arg("leaf_size") = 10,
-           py::arg("nthread") = 1)
-      .def_readonly("tree_data", &KDT::tree_data_)
-      .def_readonly("dim", &KDT::dim_)
-      .def_readonly("metric", &KDT::metric_)
+  nb::class_<KDT>(m, class_name)
+      .def(nb::init<>())
+      .def(nb::init<nb::ndarray<const T, nb::c_contig>, size_t, int>(),
+           nb::arg("tree_data"),
+           nb::arg("leaf_size") = 10,
+           nb::arg("nthread") = 1)
+      .def_prop_ro("tree_data", [](const KDT& kdt) { return kdt.tree_data_; })
+      .def_ro("dim", &KDT::dim_)
+      .def_ro("metric", &KDT::metric_)
       .def("newtree",
            &KDT::newtree,
-           py::arg("tree_data"),
-           py::arg("leaf_size") = 10,
-           py::arg("nthread") = 1)
+           nb::arg("tree_data"),
+           nb::arg("leaf_size") = 10,
+           nb::arg("nthread") = 1)
       .def("knn_search",
            &KDT::knn_search,
-           py::arg("queries"),
-           py::arg("kneighbors"),
-           py::arg("nthread"),
-           py::return_value_policy::move)
-      .def("query",
-           &KDT::query,
-           py::arg("queries"),
-           py::arg("nthread"),
-           py::return_value_policy::move)
+           nb::arg("queries"),
+           nb::arg("kneighbors"),
+           nb::arg("nthread"))
+      .def("query", &KDT::query, nb::arg("queries"), nb::arg("nthread"))
       .def("radius_search",
            &KDT::radius_search,
-           py::arg("queries"),
-           py::arg("radius"),
-           py::arg("return_sorted"),
-           py::arg("nthread"),
-           py::return_value_policy::move)
+           nb::arg("queries"),
+           nb::arg("radius"),
+           nb::arg("return_sorted"),
+           nb::arg("nthread"))
       .def("rknn_search",
            &KDT::rknn_search,
-           py::arg("queries"),
-           py::arg("radius"),
-           py::arg("n_nearest"),
-           py::arg("nthread"),
-           py::return_value_policy::move)
+           nb::arg("queries"),
+           nb::arg("radius"),
+           nb::arg("n_nearest"),
+           nb::arg("nthread"))
       .def("query_ball_point",
            &KDT::query_ball_point,
-           py::arg("queries"),
-           py::arg("radius"),
-           py::arg("return_sorted"),
-           py::arg("nthread"),
-           py::return_value_policy::move)
+           nb::arg("queries"),
+           nb::arg("radius"),
+           nb::arg("return_sorted"),
+           nb::arg("nthread"))
       .def("radii_search",
            &KDT::radii_search,
-           py::arg("queries"),
-           py::arg("radii"),
-           py::arg("return_sorted"),
-           py::arg("nthread"),
-           py::return_value_policy::move)
+           nb::arg("queries"),
+           nb::arg("radii"),
+           nb::arg("return_sorted"),
+           nb::arg("nthread"))
       .def("tree_data_unique_inverse",
            &KDT::tree_data_unique_inverse,
-           py::arg("radius"),
-           py::arg("return_intersection") = true,
-           py::arg("nthread") = 1);
+           nb::arg("radius"),
+           nb::arg("return_intersection") = true,
+           nb::arg("nthread") = 1);
 }
 
 } // namespace napf

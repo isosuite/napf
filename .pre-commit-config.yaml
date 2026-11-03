@@ -48,9 +48,3 @@ repos:
   rev: "v0.6.13"
   hooks:
   - id: cmake-format
-
-- repo: https://github.com/keewis/blackdoc
-  rev: v0.4.6
-  hooks:
-  - id: blackdoc
-    additional_dependencies: [tomli]
