@@ -101,7 +101,7 @@ jobs:
     runs-on: windows-latest
     strategy:
       matrix:
-        arch: [x86, AMD64, ARM64]
+        arch: [AMD64, ARM64]
 
     steps:
     - uses: actions/checkout@v4
